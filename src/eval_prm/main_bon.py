@@ -57,11 +57,11 @@ def compute_metrics_fn(eval_results, k, agg_method):
 
 # === CLI Arguments ===
 parser = argparse.ArgumentParser()
-parser.add_argument('--model_name_or_path', type=str, default="google/gemma-1.5-12b-it")
-parser.add_argument('--prompt_type', type=str, default="gemma-math-cot")
+parser.add_argument('--model_name_or_path', type=str, default="TheBloke/deepseek-llm-r1-7b-instruct-GGUF")
+parser.add_argument('--prompt_type', type=str, default="deepseek-math-cot")
 parser.add_argument('--data_name', type=str, default="college_math")
 parser.add_argument('--split', type=str, default="test")
-parser.add_argument('--output_dir', type=str, default="./outputs/gemma_12b")
+parser.add_argument('--output_dir', type=str, default="./outputs/deepseek_r1_unsloth")
 parser.add_argument('--num_test_sample', type=int, default=0)
 parser.add_argument('--temperature', type=float, default=0.7)
 parser.add_argument('--top_p', type=float, default=0.8)
