@@ -5,16 +5,16 @@ from tqdm import tqdm
 from collections import defaultdict
 from tabulate import tabulate
 import numpy as np
-from vllm import LLM, SamplingParams
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
-# Add root to sys.path (for src imports)
+# Add root to sys.path for local src imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.eval_utils.data import load_datasets, save_jsonl
 from src.eval_utils.grader import math_equal
 from src.eval_utils.parser import parse_ground_truth, extract_and_strip
 from src.eval_utils.vote import AGG_FN_MAP
-
 
 def compute_metrics_fn(eval_results, k, agg_method):
     final_results = []
@@ -53,25 +53,25 @@ def compute_metrics_fn(eval_results, k, agg_method):
     metrics.append({"Average": average_accuracy})
     return metrics
 
-
 # === CLI Arguments ===
 parser = argparse.ArgumentParser()
-parser.add_argument('--model_name_or_path', type=str, default="TheBloke/deepseek-llm-r1-7b-instruct-GGUF")
+parser.add_argument('--model_name_or_path', type=str, default="deepseek-ai/deepseek-llm-7b-chat")
 parser.add_argument('--prompt_type', type=str, default="deepseek-math-cot")
 parser.add_argument('--data_name', type=str, default="college_math")
 parser.add_argument('--split', type=str, default="test")
-parser.add_argument('--output_dir', type=str, default="./outputs/deepseek_r1_unsloth")
-parser.add_argument('--num_test_sample', type=int, default=0)
+parser.add_argument('--output_dir', type=str, default="./outputs/deepseek_r1_transformers")
+parser.add_argument('--num_test_sample', type=int, default=10)
 parser.add_argument('--temperature', type=float, default=0.7)
 parser.add_argument('--top_p', type=float, default=0.8)
 parser.add_argument('--save_outputs', action="store_true")
 args = parser.parse_args()
 
+# === Create Output Directory ===
 output_dir = os.path.abspath(args.output_dir)
 os.makedirs(output_dir, exist_ok=True)
 print(f"[DEBUG] Using output directory: {output_dir}")
 
-# === Load datasets ===
+# === Load Dataset ===
 datasets = load_datasets([f"{args.data_name}/{args.split}"])
 if args.num_test_sample:
     datasets = datasets[:args.num_test_sample]
@@ -79,19 +79,29 @@ if args.num_test_sample:
 print(f"[DEBUG] First sample:\n{datasets[0]}")
 print(f"[DEBUG] Available keys: {list(datasets[0].keys())}")
 
-# === Load VLLM Model ===
-sampling_params = SamplingParams(
-    temperature=args.temperature,
-    top_p=args.top_p,
-    max_tokens=512,
-    stop=[],
-    use_beam_search=False
-)
+# === Load Model and Tokenizer ===
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"[INFO] Loading model on {device}: {args.model_name_or_path}")
 
-print(f"[INFO] Loading model: {args.model_name_or_path}")
-llm = LLM(model=args.model_name_or_path, dtype="float16")
+tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+model = AutoModelForCausalLM.from_pretrained(
+    args.model_name_or_path,
+    torch_dtype=torch.float16 if device == "cuda" else torch.float32
+).to(device)
 
-# === Generate responses ===
+# === Inference Function ===
+def generate_output(prompt: str) -> str:
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=512,
+        do_sample=True,
+        temperature=args.temperature,
+        top_p=args.top_p
+    )
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+# === Generate Responses ===
 generations = []
 checkpoint_interval = 100
 checkpoint_path = os.path.join(output_dir, "checkpoint_generations.jsonl")
@@ -103,10 +113,9 @@ for idx, sample in enumerate(tqdm(datasets, desc="Generating responses")):
         continue
 
     try:
-        outputs = llm.generate(prompts=[prompt], sampling_params=sampling_params)
-        output_text = outputs[0].outputs[0].text
+        output_text = generate_output(prompt)
     except Exception as e:
-        print(f"[ERROR] VLLM generation failed for prompt: {prompt} — {e}")
+        print(f"[ERROR] Generation failed for prompt: {prompt} — {e}")
         continue
 
     generation = {
@@ -123,25 +132,25 @@ for idx, sample in enumerate(tqdm(datasets, desc="Generating responses")):
         save_jsonl(generations, checkpoint_path)
         print(f"[INFO] Checkpoint saved at {idx + 1} samples")
 
-# Final Save
+# === Save Full Output ===
 if args.save_outputs:
     full_output_path = os.path.join(output_dir, "generations.jsonl")
     save_jsonl(generations, full_output_path)
-    print(f"[INFO] Final full generations saved.")
+    print(f"[INFO] Final generations saved.")
 
-# === Evaluate ===
+# === Evaluation ===
 for gen in generations:
     try:
         gen["correct"] = math_equal(gen["pred"], gen["gt_ans"])
     except Exception as e:
-        print(f"[ERROR] Failed to evaluate: {gen['pred']} vs {gen['gt_ans']} – {e}")
+        print(f"[ERROR] Evaluation failed: {gen['pred']} vs {gen['gt_ans']} — {e}")
         gen["correct"] = False
 
 eval_path = os.path.join(output_dir, "eval_results.jsonl")
 save_jsonl(generations, eval_path)
 print(f"[INFO] Evaluation results saved.")
 
-# === Compute metrics ===
+# === Compute Metrics ===
 metrics_output_path = os.path.join(output_dir, "metrics.txt")
 eval_results = []
 for g in generations:
