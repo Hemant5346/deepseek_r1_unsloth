@@ -111,10 +111,9 @@ for sample in tqdm(datasets, desc="Generating responses"):
         output = qa_pipeline(
             prompt,
             max_new_tokens=512,
-            do_sample=False,
-            temperature=args.temperature,
-            top_p=args.top_p
+            do_sample=False  # Greedy decoding
         )[0]["generated_text"]
+
     except Exception as e:
         print(f"[ERROR] Pipeline generation failed for prompt: {prompt} — {e}")
         continue
