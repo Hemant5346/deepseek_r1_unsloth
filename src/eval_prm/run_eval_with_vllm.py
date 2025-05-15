@@ -92,14 +92,20 @@ model = AutoModelForCausalLM.from_pretrained(
 # === Inference Function ===
 def generate_output(prompt: str) -> str:
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=512,
-        do_sample=True,
-        temperature=args.temperature,
-        top_p=args.top_p
-    )
+
+    do_sample = args.temperature > 0.0
+    gen_kwargs = {
+        "max_new_tokens": 512,
+        "do_sample": do_sample,
+    }
+
+    if do_sample:
+        gen_kwargs["temperature"] = args.temperature
+        gen_kwargs["top_p"] = args.top_p
+
+    outputs = model.generate(**inputs, **gen_kwargs)
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
 
 # === Generate Responses ===
 generations = []
